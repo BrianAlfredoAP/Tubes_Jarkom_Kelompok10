@@ -12,3 +12,7 @@ def remove_client(username):
 
 def get_client(username):
     return clients.get(username)
+
+
+def get_all_clients():
+    return dict(clients)
