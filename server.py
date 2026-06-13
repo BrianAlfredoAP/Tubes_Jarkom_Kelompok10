@@ -1,11 +1,31 @@
+# FILE: server.py
+
 import socket
 import threading
-from unicast.multithread import handle_client
 
-HOST = "0.0.0.0"
-PORT = 8080
+# ================= CONFIG =================
 
-server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+HOST = '127.0.0.1'
+PORT = 5000
+
+MULTICAST_GROUP = '224.1.1.1'
+MULTICAST_PORT = 5002
+
+BROADCAST_PORT = 5003
+
+BUFFER_SIZE = 4096
+
+# MODE:
+# single / multi
+
+MODE = "multi"
+
+# ================= TCP SERVER =================
+
+server = socket.socket(
+    socket.AF_INET,
+    socket.SOCK_STREAM
+)
 
 server.setsockopt(
     socket.SOL_SOCKET,
@@ -14,26 +34,83 @@ server.setsockopt(
 )
 
 server.bind((HOST, PORT))
-server.listen(10)
 
-clients = {}
+server.listen()
 
-print(f"[SERVER] Running on {PORT}")
+print(f"[TCP] Server aktif di port {PORT}")
+print(f"[MODE] {MODE}")
+
+clients = []
+clients_lock = threading.Lock()
+
+# ================= BROADCAST TCP =================
+
+def broadcast_tcp(data, sender):
+
+    with clients_lock:
+
+        for client in clients[:]:
+
+            if client != sender:
+
+                try:
+
+                    client.sendall(data)
+
+                except:
+
+                    clients.remove(client)
+
+# ================= HANDLE CLIENT =================
+
+def handle_client(conn, addr):
+
+    print(f"[TCP] Client masuk: {addr}")
+
+    while True:
+
+        try:
+
+            data = conn.recv(BUFFER_SIZE)
+
+            if not data:
+                break
+
+            broadcast_tcp(data, conn)
+
+        except:
+            break
+
+    with clients_lock:
+
+        if conn in clients:
+            clients.remove(conn)
+
+    conn.close()
+
+    print(f"[TCP] Client keluar: {addr}")
+
+# ================= TCP LOOP =================
 
 while True:
 
-    client_socket, address = server.accept()
+    conn, addr = server.accept()
 
-    username = client_socket.recv(1024).decode()
+    with clients_lock:
+        clients.append(conn)
 
-    clients[username] = client_socket
+    # ================= SINGLE THREAD =================
 
-    print(f"[CONNECTED] {username}")
-    print(clients.keys())
+    if MODE == "single":
 
-    thread = threading.Thread(
-        target=handle_client,
-        args=(client_socket, username, clients)
-    )
+        handle_client(conn, addr)
 
-    thread.start()
+    # ================= MULTITHREAD =================
+
+    else:
+
+        threading.Thread(
+            target=handle_client,
+            args=(conn, addr),
+            daemon=True
+        ).start()

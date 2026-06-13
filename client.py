@@ -1,115 +1,307 @@
+# =========================
+# FILE: client.py
+# =========================
+
 import socket
 import threading
-from transfer.file_transfer import send_file
+import os
+from datetime import datetime
 
-HOST = "127.0.0.1"
-PORT = 8080
+from utils.menu import (
+    pilih_metode,
+    pilih_data
+)
+from multicast.multicast import pilih_group
 
-client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-client.connect((HOST, PORT))
-
-username = input("Username: ")
-client.send(username.encode())
-
-
-def receive_message():
-
-    while True:
-
-        try:
-
-            message = client.recv(4096).decode()
-
-            if not message:
-                break
-
-            print(f"\n{message}")
-            print("Pilih menu: ", end="", flush=True)
-
-        except Exception as e:
-
-            print(f"[ERROR] {e}")
-            break
-
-
-receive_thread = threading.Thread(
-    target=receive_message
+from utils.sender import (
+    send_text,
+    send_file
 )
 
-receive_thread.start()
+from utils.receiver import (
+    receive_tcp,
+    create_multicast_socket,
+    create_broadcast_socket,
+    receive_multicast,
+    receive_broadcast
+)
 
+# ================= CONFIG =================
+
+HOST = '127.0.0.1'
+PORT = 5000
+
+MULTICAST_PORT = 5002
+BROADCAST_PORT = 5003
+
+BUFFER_SIZE = 4096
+
+# ================= USER =================
+
+username = input("Masukkan username: ")
+
+# ================= TCP CLIENT =================
+
+client = socket.socket(
+    socket.AF_INET,
+    socket.SOCK_STREAM
+)
+
+client.connect((HOST, PORT))
+
+# ================= ASSETS =================
+
+os.makedirs("assets/dokumen", exist_ok=True)
+os.makedirs("assets/gambar", exist_ok=True)
+os.makedirs("assets/audio", exist_ok=True)
+os.makedirs("assets/video", exist_ok=True)
+
+# ================= RECEIVE THREAD =================
+
+threading.Thread(
+    target=receive_tcp,
+    args=(client,),
+    daemon=True
+).start()
+
+multicast_recv_sock = create_multicast_socket(MULTICAST_PORT)
+threading.Thread(
+    target=receive_multicast,
+    args=(multicast_recv_sock,),
+    daemon=True
+).start()
+
+broadcast_recv_sock = create_broadcast_socket(BROADCAST_PORT)
+threading.Thread(
+    target=receive_broadcast,
+    args=(broadcast_recv_sock,),
+    daemon=True
+).start()
+
+# ================= MENU LOOP =================
 
 while True:
 
-    print("""
-========= MENU =========
+    metode = pilih_metode()
+    jenis = pilih_data()
 
-1. Unicast Single Thread
-2. Unicast Multithread
-3. Multicast
-4. Broadcast
-5. Send File
-6. Exit
+    multicast_group = None
+    multicast_socket = None
+    broadcast_socket = None
 
-========================
-""")
+    # ================= METODE =================
 
-    choice = input("Pilih menu: ")
+    if metode == '1':
 
-    # UNICAST SINGLE
-    if choice == "1":
+        metode_text = "SINGLE THREAD"
 
-        target = input("Target username: ")
-        message = input("Pesan: ")
+    elif metode == '2':
 
-        command = f"/unicast {target} {message}"
+        metode_text = "MULTITHREAD"
 
-        client.send(command.encode())
+    elif metode == '3':
 
-    # UNICAST MULTITHREAD
-    elif choice == "2":
+        metode_text = "MULTICAST"
 
-        target = input("Target username: ")
-        message = input("Pesan: ")
+        multicast_group = pilih_group()
 
-        command = f"/unicast {target} {message}"
-
-        client.send(command.encode())
-
-    # MULTICAST
-    elif choice == "3":
-
-        targets = input(
-            "Target usernames (pisahkan koma): "
+        multicast_socket = socket.socket(
+            socket.AF_INET,
+            socket.SOCK_DGRAM,
+            socket.IPPROTO_UDP
         )
 
-        message = input("Pesan: ")
+        multicast_socket.setsockopt(
+            socket.IPPROTO_IP,
+            socket.IP_MULTICAST_TTL,
+            2
+        )
 
-        command = f"/multicast {targets} {message}"
+        print(f"Group aktif: {multicast_group}")
 
-        client.send(command.encode())
+    elif metode == '4':
 
-    # BROADCAST
-    elif choice == "4":
+        metode_text = "BROADCAST"
 
-        message = input("Pesan broadcast: ")
+        broadcast_socket = socket.socket(
+            socket.AF_INET,
+            socket.SOCK_DGRAM
+        )
 
-        command = f"/broadcast {message}"
-
-        client.send(command.encode())
-
-    # SEND FILE
-    elif choice == "5":
-
-        filepath = input("Path file: ")
-
-        send_file(client, filepath)
-
-    # EXIT
-    elif choice == "6":
-
-        client.close()
-        break
+        broadcast_socket.setsockopt(
+            socket.SOL_SOCKET,
+            socket.SO_BROADCAST,
+            1
+        )
 
     else:
-        print("[ERROR] Menu tidak valid")
+
+        print("Metode tidak valid")
+        continue
+
+    print("\nKetik 'exit' untuk kembali")
+
+    # ================= CHAT LOOP =================
+
+    while True:
+
+        pesan = input("Kirim: ")
+
+        if pesan.lower() == 'exit':
+
+            print("\nKembali ke menu...\n")
+
+            break
+
+        # ==================================================
+        # ================= KIRIM TEXT =====================
+        # ==================================================
+
+        if jenis == '1':
+
+            timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')
+
+            # ================= MULTICAST =================
+
+            if metode == '3':
+
+                message = (
+                    f"MSG|"
+                    f"[{username}] "
+                    f"METODE:{metode_text} "
+                    f"JENIS:TEXT "
+                    f"WAKTU:{timestamp} "
+                    f"ISI:{pesan}\n"
+                )
+
+                multicast_socket.sendto(
+                    message.encode(),
+                    (multicast_group, MULTICAST_PORT)
+                )
+
+                print("Pesan multicast terkirim")
+
+            # ================= BROADCAST =================
+
+            elif metode == '4':
+
+                message = (
+                    f"MSG|"
+                    f"[{username}] "
+                    f"METODE:{metode_text} "
+                    f"JENIS:TEXT "
+                    f"WAKTU:{timestamp} "
+                    f"ISI:{pesan}\n"
+                )
+
+                broadcast_socket.sendto(
+                    message.encode(),
+                    ('<broadcast>', BROADCAST_PORT)
+                )
+
+                print("Pesan broadcast terkirim")
+
+            # ================= TCP =================
+
+            else:
+
+                send_text(
+                    client,
+                    username,
+                    metode_text,
+                    "TEXT",
+                    pesan
+                )
+
+        # ==================================================
+        # ================= KIRIM FILE =====================
+        # ==================================================
+
+        elif jenis == '2':
+
+            pesan = pesan.strip('"').strip("'")
+
+            if not os.path.exists(pesan):
+
+                print("File tidak ditemukan")
+
+                continue
+
+            # ================= MULTICAST =================
+
+            if metode == '3':
+
+                filename = os.path.basename(pesan)
+
+                filesize = os.path.getsize(pesan)
+
+                timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')
+
+                header = f"FILE|{filename}|{filesize}|{timestamp}\n"
+
+                multicast_socket.sendto(
+                    header.encode(),
+                    (multicast_group, MULTICAST_PORT)
+                )
+
+                with open(pesan, 'rb') as f:
+
+                    while True:
+
+                        data = f.read(BUFFER_SIZE)
+
+                        if not data:
+                            break
+
+                        multicast_socket.sendto(
+                            data,
+                            (multicast_group, MULTICAST_PORT)
+                        )
+
+                print(f"File multicast terkirim: {filename}")
+
+            # ================= BROADCAST =================
+
+            elif metode == '4':
+
+                filename = os.path.basename(pesan)
+
+                filesize = os.path.getsize(pesan)
+
+                timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')
+
+                header = f"FILE|{filename}|{filesize}|{timestamp}\n"
+
+                broadcast_socket.sendto(
+                    header.encode(),
+                    ('<broadcast>', BROADCAST_PORT)
+                )
+
+                with open(pesan, 'rb') as f:
+
+                    while True:
+
+                        data = f.read(BUFFER_SIZE)
+
+                        if not data:
+                            break
+
+                        broadcast_socket.sendto(
+                            data,
+                            ('<broadcast>', BROADCAST_PORT)
+                        )
+
+                print(f"File broadcast terkirim: {filename}")
+
+            # ================= TCP =================
+
+            else:
+
+                send_file(
+                    client,
+                    pesan
+                )
+
+        else:
+
+            print("Jenis data tidak valid")
